@@ -96,31 +96,6 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             Acessar Sistema
           </button>
 
-          <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-100"></div>
-            </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-white text-slate-400 font-medium italic">Ou entre com</span>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={async () => {
-              const { error } = await supabase.auth.signInWithOAuth({
-                provider: 'github',
-                options: {
-                  redirectTo: window.location.origin
-                }
-              });
-              if (error) notify("Erro ao conectar com GitHub: " + error.message, "warning");
-            }}
-            className="w-full bg-slate-900 hover:bg-black text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-slate-200 transition-all flex items-center justify-center space-x-3"
-          >
-            <i className="fab fa-github text-xl"></i>
-            <span>Entrar com GitHub</span>
-          </button>
         </form>
 
         <div className="mt-8 pt-6 border-t border-slate-100 text-center">
