@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { User, Sale, SaleStatus } from '../types.ts';
 import { useApp } from '../App.tsx';
+import { SalesService } from '../utils/supabase/salesService.ts';
 
 interface SalesUnderReviewProps {
     user: User;
@@ -11,20 +12,18 @@ const SalesUnderReview: React.FC<SalesUnderReviewProps> = ({ user }) => {
     const { notify } = useApp();
 
     useEffect(() => {
-        const loadSales = () => {
-            const savedSales = localStorage.getItem(`nexus_sales_${user.id}`);
-            if (savedSales) {
-                const allSales: Sale[] = JSON.parse(savedSales);
-                // Filtra apenas as que estão EM PROGRESSO e SEM motivo de devolução
-                const underReview = allSales.filter(s =>
-                    s.status === SaleStatus.IN_PROGRESS && !s.returnReason
-                );
-                setSales(underReview);
-            }
+        const loadSales = async () => {
+            // Busca vendas do vendedor diretamente do Banco
+            const allSales = await SalesService.getSalesBySeller(user.id);
+            // Filtra apenas as que estão EM PROGRESSO e SEM motivo de devolução
+            const underReview = allSales.filter(s =>
+                s.status === SaleStatus.IN_PROGRESS && !s.returnReason
+            );
+            setSales(underReview);
         };
 
         loadSales();
-        const interval = setInterval(loadSales, 5000); // Atualiza a cada 5s
+        const interval = setInterval(loadSales, 10000); // Atualiza a cada 10s
         return () => clearInterval(interval);
     }, [user.id]);
 
