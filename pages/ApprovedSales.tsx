@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Sale, SaleStatus } from '../types.ts';
 import { useApp } from '../App.tsx';
+import { SalesService } from '../utils/supabase/salesService.ts';
 
 interface ApprovedSalesProps {
     user: User;
@@ -11,18 +12,16 @@ const ApprovedSales: React.FC<ApprovedSalesProps> = ({ user }) => {
     const { notify } = useApp();
 
     useEffect(() => {
-        const loadSales = () => {
-            const savedSales = localStorage.getItem(`nexus_sales_${user.id}`);
-            if (savedSales) {
-                const allSales: Sale[] = JSON.parse(savedSales);
-                // Filtra apenas as vendas FINALIZADAS (Aprovadas)
-                const approved = allSales.filter(s => s.status === SaleStatus.FINISHED);
-                setSales(approved);
-            }
+        const loadSales = async () => {
+            // Busca vendas do vendedor diretamente do Banco
+            const allSales = await SalesService.getSalesBySeller(user.id);
+            // Filtra apenas as vendas FINALIZADAS (Aprovadas)
+            const approved = allSales.filter(s => s.status === SaleStatus.FINISHED);
+            setSales(approved);
         };
 
         loadSales();
-        const interval = setInterval(loadSales, 10000); // Atualiza a cada 10s
+        const interval = setInterval(loadSales, 15000); // Atualiza a cada 15s
         return () => clearInterval(interval);
     }, [user.id]);
 
