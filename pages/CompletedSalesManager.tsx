@@ -3,24 +3,16 @@ import JSZip from 'jszip';
 import { Sale, SaleStatus, AppPermission } from '../types.ts';
 import { useApp } from '../App.tsx';
 
+import { SalesService } from '../utils/supabase/salesService.ts';
+
 const CompletedSalesManager: React.FC = () => {
     const [sales, setSales] = useState<Sale[]>([]);
     const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
     const { notify, hasPermission } = useApp();
 
-    const loadCompletedSales = () => {
-        const allSales: Sale[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && key.startsWith('nexus_sales_')) {
-                try {
-                    const userSales = JSON.parse(localStorage.getItem(key) || '[]');
-                    allSales.push(...userSales);
-                } catch (e) {
-                    console.error("Erro ao ler vendas", e);
-                }
-            }
-        }
+    const loadCompletedSales = async () => {
+        // Busca do Banco de Dados
+        const allSales = await SalesService.getAllSales();
 
         // Filtra apenas as FINALIZADAS
         const finished = allSales.filter(s => s.status === SaleStatus.FINISHED);
