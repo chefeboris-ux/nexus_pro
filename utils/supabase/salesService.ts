@@ -18,17 +18,25 @@ export const SalesService = {
 
     // Buscar vendas por vendedor
     async getSalesBySeller(sellerId: string): Promise<Sale[]> {
+        console.log('🔵 SalesService.getSalesBySeller - Buscando vendas para:', sellerId);
+
         const { data, error } = await supabase
             .from('vendas')
             .select('*')
             .eq('seller_id', sellerId);
 
         if (error) {
-            console.error('Erro ao buscar vendas do vendedor:', error);
+            console.error('❌ Erro ao buscar vendas do vendedor:', error);
             return [];
         }
 
-        return data.map(mapToSale);
+        console.log('🔵 Vendas encontradas no banco:', data?.length || 0);
+        console.log('🔵 Dados brutos:', data);
+
+        const mapped = data.map(mapToSale);
+        console.log('🔵 Vendas mapeadas:', mapped.length);
+
+        return mapped;
     },
 
     // Criar ou atualizar venda
