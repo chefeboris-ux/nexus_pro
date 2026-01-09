@@ -232,7 +232,7 @@ const handleDeleteDraft = (draftId: string) => {
   }
 };
 
-const handleCreateSale = (e: React.FormEvent) => {
+const handleCreateSale = async (e: React.FormEvent) => {
   e.preventDefault();
   if (isReadOnly) return;
   if (!isFormValid) {
@@ -265,8 +265,13 @@ const handleCreateSale = (e: React.FormEvent) => {
     createdAt: existingSale?.createdAt || new Date().toISOString()
   };
 
+  console.log('🟢 Tentando salvar venda:', newSale);
+
   // Salvar no Banco via Service
   const saved = await SalesService.saveSale(newSale);
+
+  console.log('🟢 Resultado do salvamento:', saved ? 'SUCESSO' : 'FALHOU');
+
   if (saved) {
     setSales(prev => {
       const index = prev.findIndex(s => s.id === finalId);
