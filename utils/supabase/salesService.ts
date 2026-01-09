@@ -33,10 +33,10 @@ export const SalesService = {
 
     // Criar ou atualizar venda
     async saveSale(sale: Sale): Promise<Sale | null> {
+        console.log('🔵 SalesService.saveSale - Iniciando salvamento:', sale.id);
         const dbSale = mapFromSale(sale);
+        console.log('🔵 Dados mapeados para DB:', dbSale);
 
-        // Check if exists to decide upsert behavior details if needed, 
-        // but upsert is usually fine if ID is consistently managed.
         const { data, error } = await supabase
             .from('vendas')
             .upsert(dbSale)
@@ -44,10 +44,12 @@ export const SalesService = {
             .single();
 
         if (error) {
-            console.error('Erro ao salvar venda:', error);
+            console.error('❌ Erro ao salvar venda no Supabase:', error);
+            console.error('❌ Detalhes do erro:', JSON.stringify(error, null, 2));
             return null;
         }
 
+        console.log('✅ Venda salva com sucesso no Supabase:', data);
         return mapToSale(data);
     },
 
