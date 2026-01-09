@@ -1,0 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --background: #F0F2F5;
+  --foreground: #1F2937;
+  --primary: #3B82F6;
+  --primary-foreground: #ffffff;
+  --card: #ffffff;
+  --card-foreground: #1F2937;
+  --border: #E5E7EB;
+  --input: #E5E7EB;
+  --ring: #3B82F6;
+  --radius: 0.75rem;
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: 'Inter', sans-serif;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: #111827;
+  font-weight: 700;
+}
+
+input, select, textarea {
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  font-family: inherit;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background-color: var(--primary);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius);
+  font-weight: 600;
+  border: none;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.card {
+  background-color: var(--card);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+}
+
+/* Custom indicator animations */
+.animate-in {
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
