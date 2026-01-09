@@ -1,14 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// TEMPORÁRIO: Credenciais hardcoded para debug
+// TODO: Mover para variáveis de ambiente após confirmar funcionamento
+const supabaseUrl = 'https://hswuafrnzgvuqyrxouvu.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhzd3VhZnJuemd2dXF5cnhvdXZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc5Mjc1NjEsImV4cCI6MjA4MzUwMzU2MX0.iOl7PsJB9UqSaJ9jPhOIR4skO44J80J_ySOCvMOYpT8';
 
-if (!supabaseUrl || !supabaseKey) {
-    console.warn("⚠️ Supabase: Variáveis de ambiente VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY não encontradas.");
-}
+console.log('🔧 Supabase Client Inicializado');
+console.log('🔧 URL:', supabaseUrl);
+console.log('🔧 Key:', supabaseKey.substring(0, 20) + '...');
 
-// Fallback para evitar crash da aplicação se as envs não estiverem definidas (comum em pre-builds)
-const safeUrl = supabaseUrl || 'https://placeholder.supabase.co';
-const safeKey = supabaseKey || 'placeholder-key';
-
-export const supabase = createClient(safeUrl, safeKey);
+export const supabase = createClient(supabaseUrl, supabaseKey);
