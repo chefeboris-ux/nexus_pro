@@ -130,474 +130,477 @@ const SellerDashboard: React.FC<SellerDashboardProps> = ({ user }) => {
       clearInterval(interval);
     };
   }, [loadData]);
-  if (formData.nome || formData.cpf) {
-    const draftId = editingSaleId || 'TMP_' + Math.random().toString(36).substr(2, 5).toUpperCase();
-    if (!editingSaleId) setEditingSaleId(draftId);
 
-    const newDraft: Sale = {
-      id: draftId,
+  useEffect(() => {
+    const isOfficialSale = sales.some(s => s.id === editingSaleId);
+    if (!showModal || isReadOnly || isOfficialSale) return;
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+
+    autoSaveTimer.current = setTimeout(() => {
+      if (formData.nome || formData.cpf) {
+        const draftId = editingSaleId || 'TMP_' + Math.random().toString(36).substr(2, 5).toUpperCase();
+        if (!editingSaleId) setEditingSaleId(draftId);
+
+        const newDraft: Sale = {
+          id: draftId,
+          sellerId: user.id,
+          sellerName: user.name,
+          customerData: { ...formData },
+          status: SaleStatus.DRAFT,
+          statusHistory: [{ status: SaleStatus.DRAFT, updatedBy: user.name, updatedAt: new Date().toISOString() }],
+          createdAt: new Date().toISOString(),
+          expiresAt: Date.now() + (24 * 60 * 60 * 1000)
+        };
+
+        const currentCacheRaw = localStorage.getItem(`nexus_cache_${user.id}`);
+        let currentDrafts: Sale[] = [];
+        if (currentCacheRaw) {
+          const dec = decrypt(currentCacheRaw, user.id);
+          if (dec) currentDrafts = JSON.parse(dec);
+        }
+
+        const updatedDrafts = currentDrafts.some(d => d.id === draftId)
+          ? currentDrafts.map(d => d.id === draftId ? newDraft : d)
+          : [newDraft, ...currentDrafts];
+
+        localStorage.setItem(`nexus_cache_${user.id}`, encrypt(JSON.stringify(updatedDrafts), user.id));
+        setCachedDrafts(updatedDrafts);
+      }
+    }, 2000);
+
+    return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
+  }, [formData, showModal, editingSaleId, user.id, user.name, isReadOnly, sales]);
+
+  const errors = useMemo(() => {
+    if (isReadOnly) return {};
+    const errs: Record<string, string> = {};
+    if (formData.nome.trim().length <= 3) errs.nome = "Nome muito curto";
+    if (formData.nome_mae.trim().length <= 3) errs.nome_mae = "Nome muito curto";
+    const cleanDoc = (formData.cpf || '').replace(/[^\d]/g, '');
+    if (cleanDoc.length === 11) { if (!cpfValidator.isValid(cleanDoc)) errs.cpf = "CPF Inválido"; }
+    else if (cleanDoc.length === 14) { if (!cnpjValidator.isValid(cleanDoc)) errs.cpf = "CNPJ Inválido"; }
+
+    // Validação de e-mail em tempo real
+    if (formData.email && formData.email.trim() !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+      errs.email = "Formato de e-mail inválido";
+    }
+
+    if (!formData.plano) errs.plano = "Obrigatório";
+    if (!formData.cep) errs.cep = "Obrigatório";
+    if (!formData.rua) errs.rua = "Obrigatório";
+    if (!formData.numero) errs.numero = "Obrigatório";
+    return errs;
+  }, [formData, isReadOnly]);
+
+  const isFormValid = Object.keys(errors).length === 0 &&
+    formData.nome &&
+    formData.nome_mae &&
+    formData.cpf &&
+    formData.email &&
+    formData.plano &&
+    formData.audio_url &&
+    formData.cep &&
+    formData.rua &&
+    formData.numero;
+
+  const handleCepLookup = async (cep: string) => {
+    if (isReadOnly) return;
+    const cleanCep = cep.replace(/[^\d]/g, '');
+    if (cleanCep.length !== 8) return;
+    setIsCepLoading(true);
+    try {
+      const response = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+      const data = await response.json();
+      if (!data.erro) {
+        setFormData(prev => ({
+          ...prev,
+          rua: data.logradouro || prev.rua,
+          bairro: data.bairro || prev.bairro,
+          cidade: data.localidade || prev.cidade,
+          estado: data.uf || prev.estado,
+          cep: data.cep
+        }));
+      }
+    } catch (e) { }
+    finally { setIsCepLoading(false); }
+  };
+
+  const handleDeleteDraft = (draftId: string) => {
+    if (window.confirm("Tem certeza que deseja excluir este rascunho permanentemente?")) {
+      const updatedDrafts = cachedDrafts.filter(d => d.id !== draftId);
+      setCachedDrafts(updatedDrafts);
+      localStorage.setItem(`nexus_cache_${user.id}`, encrypt(JSON.stringify(updatedDrafts), user.id));
+      if (editingSaleId === draftId) {
+        setShowModal(false);
+        setEditingSaleId(null);
+        setFormData(initialCustomerData);
+      }
+      notify("Rascunho excluído.", "info");
+    }
+  };
+
+  const handleCreateSale = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isReadOnly) return;
+    if (!isFormValid) {
+      setTouched(Object.keys(formData).reduce((acc, key) => ({ ...acc, [key]: true }), {}));
+      notify("Campos obrigatórios pendentes ou inválidos.", "warning");
+      return;
+    }
+
+    const newDrafts = cachedDrafts.filter(d => d.id !== editingSaleId);
+    setCachedDrafts(newDrafts);
+    localStorage.setItem(`nexus_cache_${user.id}`, encrypt(JSON.stringify(newDrafts), user.id));
+
+    const finalId = editingSaleId && !editingSaleId.startsWith('TMP_')
+      ? editingSaleId
+      : Math.random().toString(36).substr(2, 9).toUpperCase();
+
+    const existingSale = sales.find(s => s.id === finalId);
+
+    const newSale: Sale = {
+      id: finalId,
       sellerId: user.id,
       sellerName: user.name,
       customerData: { ...formData },
-      status: SaleStatus.DRAFT,
-      statusHistory: [{ status: SaleStatus.DRAFT, updatedBy: user.name, updatedAt: new Date().toISOString() }],
-      createdAt: new Date().toISOString(),
-      expiresAt: Date.now() + (24 * 60 * 60 * 1000)
+      status: SaleStatus.IN_PROGRESS,
+      returnReason: undefined,
+      statusHistory: [
+        ...(existingSale?.statusHistory || []),
+        { status: SaleStatus.IN_PROGRESS, updatedBy: user.name, updatedAt: new Date().toISOString() }
+      ],
+      createdAt: existingSale?.createdAt || new Date().toISOString()
     };
 
-    const currentCacheRaw = localStorage.getItem(`nexus_cache_${user.id}`);
-    let currentDrafts: Sale[] = [];
-    if (currentCacheRaw) {
-      const dec = decrypt(currentCacheRaw, user.id);
-      if (dec) currentDrafts = JSON.parse(dec);
-    }
+    console.log('🟢 Tentando salvar venda:', newSale);
 
-    const updatedDrafts = currentDrafts.some(d => d.id === draftId)
-      ? currentDrafts.map(d => d.id === draftId ? newDraft : d)
-      : [newDraft, ...currentDrafts];
+    // Salvar no Banco via Service
+    const saved = await SalesService.saveSale(newSale);
 
-    localStorage.setItem(`nexus_cache_${user.id}`, encrypt(JSON.stringify(updatedDrafts), user.id));
-    setCachedDrafts(updatedDrafts);
-  }
-}, 2000);
+    console.log('🟢 Resultado do salvamento:', saved ? 'SUCESSO' : 'FALHOU');
 
-return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
-    }, [formData, showModal, editingSaleId, user.id, user.name, isReadOnly]);
+    if (saved) {
+      notify("Ficha enviada com sucesso!", "success");
 
-const errors = useMemo(() => {
-  if (isReadOnly) return {};
-  const errs: Record<string, string> = {};
-  if (formData.nome.trim().length <= 3) errs.nome = "Nome muito curto";
-  if (formData.nome_mae.trim().length <= 3) errs.nome_mae = "Nome muito curto";
-  const cleanDoc = (formData.cpf || '').replace(/[^\d]/g, '');
-  if (cleanDoc.length === 11) { if (!cpfValidator.isValid(cleanDoc)) errs.cpf = "CPF Inválido"; }
-  else if (cleanDoc.length === 14) { if (!cnpjValidator.isValid(cleanDoc)) errs.cpf = "CNPJ Inválido"; }
+      // Remover dos rascunhos se era um rascunho
+      if (editingSaleId && cachedDrafts.some(d => d.id === editingSaleId)) {
+        const leftDrafts = cachedDrafts.filter(d => d.id !== editingSaleId);
+        setCachedDrafts(leftDrafts);
+        localStorage.setItem(`nexus_cache_${user.id}`, encrypt(JSON.stringify(leftDrafts), user.id));
+      }
 
-  // Validação de e-mail em tempo real
-  if (formData.email && formData.email.trim() !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
-    errs.email = "Formato de e-mail inválido";
-  }
-
-  if (!formData.plano) errs.plano = "Obrigatório";
-  if (!formData.cep) errs.cep = "Obrigatório";
-  if (!formData.rua) errs.rua = "Obrigatório";
-  if (!formData.numero) errs.numero = "Obrigatório";
-  return errs;
-}, [formData, isReadOnly]);
-
-const isFormValid = Object.keys(errors).length === 0 &&
-  formData.nome &&
-  formData.nome_mae &&
-  formData.cpf &&
-  formData.email &&
-  formData.plano &&
-  formData.audio_url &&
-  formData.cep &&
-  formData.rua &&
-  formData.numero;
-
-const handleCepLookup = async (cep: string) => {
-  if (isReadOnly) return;
-  const cleanCep = cep.replace(/[^\d]/g, '');
-  if (cleanCep.length !== 8) return;
-  setIsCepLoading(true);
-  try {
-    const response = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
-    const data = await response.json();
-    if (!data.erro) {
-      setFormData(prev => ({
-        ...prev,
-        rua: data.logradouro || prev.rua,
-        bairro: data.bairro || prev.bairro,
-        cidade: data.localidade || prev.cidade,
-        estado: data.uf || prev.estado,
-        cep: data.cep
-      }));
-    }
-  } catch (e) { }
-  finally { setIsCepLoading(false); }
-};
-
-const handleDeleteDraft = (draftId: string) => {
-  if (window.confirm("Tem certeza que deseja excluir este rascunho permanentemente?")) {
-    const updatedDrafts = cachedDrafts.filter(d => d.id !== draftId);
-    setCachedDrafts(updatedDrafts);
-    localStorage.setItem(`nexus_cache_${user.id}`, encrypt(JSON.stringify(updatedDrafts), user.id));
-    if (editingSaleId === draftId) {
       setShowModal(false);
-      setEditingSaleId(null);
       setFormData(initialCustomerData);
+      setEditingSaleId(null);
+      setTouched({});
+
+      // IMPORTANTE: Recarregar dados do banco para mostrar a venda salva
+      console.log('🔄 Recarregando dados do banco...');
+      await loadData();
+      console.log('✅ Dados recarregados, total de vendas:', sales.length);
+    } else {
+      notify("Erro ao enviar ficha. Tente novamente.", "warning");
     }
-    notify("Rascunho excluído.", "info");
-  }
-};
-
-const handleCreateSale = async (e: React.FormEvent) => {
-  e.preventDefault();
-  if (isReadOnly) return;
-  if (!isFormValid) {
-    setTouched(Object.keys(formData).reduce((acc, key) => ({ ...acc, [key]: true }), {}));
-    notify("Campos obrigatórios pendentes ou inválidos.", "warning");
-    return;
-  }
-
-  const newDrafts = cachedDrafts.filter(d => d.id !== editingSaleId);
-  setCachedDrafts(newDrafts);
-  localStorage.setItem(`nexus_cache_${user.id}`, encrypt(JSON.stringify(newDrafts), user.id));
-
-  const finalId = editingSaleId && !editingSaleId.startsWith('TMP_')
-    ? editingSaleId
-    : Math.random().toString(36).substr(2, 9).toUpperCase();
-
-  const existingSale = sales.find(s => s.id === finalId);
-
-  const newSale: Sale = {
-    id: finalId,
-    sellerId: user.id,
-    sellerName: user.name,
-    customerData: { ...formData },
-    status: SaleStatus.IN_PROGRESS,
-    returnReason: undefined,
-    statusHistory: [
-      ...(existingSale?.statusHistory || []),
-      { status: SaleStatus.IN_PROGRESS, updatedBy: user.name, updatedAt: new Date().toISOString() }
-    ],
-    createdAt: existingSale?.createdAt || new Date().toISOString()
   };
 
-  console.log('🟢 Tentando salvar venda:', newSale);
-
-  // Salvar no Banco via Service
-  const saved = await SalesService.saveSale(newSale);
-
-  console.log('🟢 Resultado do salvamento:', saved ? 'SUCESSO' : 'FALHOU');
-
-  if (saved) {
-    setSales(prev => {
-      const index = prev.findIndex(s => s.id === finalId);
-      if (index >= 0) {
-        const updated = [...prev];
-        updated[index] = saved;
-        return updated;
-      }
-      return [saved, ...prev];
-    });
-    notify("Ficha enviada com sucesso!", "success");
-
-    // Remover dos rascunhos se era um rascunho
-    if (editingSaleId && cachedDrafts.some(d => d.id === editingSaleId)) {
-      const leftDrafts = cachedDrafts.filter(d => d.id !== editingSaleId);
-      setCachedDrafts(leftDrafts);
-      localStorage.setItem(`nexus_cache_${user.id}`, encrypt(JSON.stringify(leftDrafts), user.id));
-    }
-
-    setShowModal(false);
+  const openNewModal = () => {
     setFormData(initialCustomerData);
     setEditingSaleId(null);
     setTouched({});
-  } else {
-    notify("Erro ao enviar ficha. Tente novamente.", "warning");
-  }
-};
+    setShowModal(true);
+  };
 
-const openNewModal = () => {
-  setFormData(initialCustomerData);
-  setEditingSaleId(null);
-  setTouched({});
-  setShowModal(true);
-};
+  const openEditModal = (sale: Sale) => {
+    setFormData(sale.customerData);
+    setEditingSaleId(sale.id);
+    setTouched({});
+    setShowModal(true);
+  };
 
-const openEditModal = (sale: Sale) => {
-  setFormData(sale.customerData);
-  setEditingSaleId(sale.id);
-  setTouched({});
-  setShowModal(true);
-};
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const field = currentUploadTarget.current;
+    if (!field || !e.target.files || e.target.files.length === 0) return;
 
-const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-  const field = currentUploadTarget.current;
-  if (!field || !e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    setUploadingField(field);
 
-  const file = e.target.files[0];
-  setUploadingField(field);
+    try {
+      notify(`Enviando ${file.name} para o servidor...`, 'info');
 
-  try {
-    notify(`Enviando ${file.name} para o servidor...`, 'info');
+      // 1. Definir caminho único no Supabase Storage
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}_${field}.${fileExt}`;
+      const filePath = `vendas/${user.id}/${fileName}`;
 
-    // 1. Definir caminho único no Supabase Storage
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${Date.now()}_${field}.${fileExt}`;
-    const filePath = `vendas/${user.id}/${fileName}`;
+      // 2. Upload para o bucket 'documentos'
+      const { data, error } = await supabase.storage
+        .from('documentos')
+        .upload(filePath, file);
 
-    // 2. Upload para o bucket 'documentos'
-    const { data, error } = await supabase.storage
-      .from('documentos')
-      .upload(filePath, file);
+      if (error) throw error;
 
-    if (error) throw error;
+      // 3. Obter URL pública
+      const { data: { publicUrl } } = supabase.storage
+        .from('documentos')
+        .getPublicUrl(filePath);
 
-    // 3. Obter URL pública
-    const { data: { publicUrl } } = supabase.storage
-      .from('documentos')
-      .getPublicUrl(filePath);
+      setFormData(prev => ({ ...prev, [field]: publicUrl }));
+      notify(`Arquivo ${file.name} enviado com sucesso!`, 'success');
+    } catch (err: any) {
+      console.error("Erro no upload:", err);
+      notify(`Erro ao enviar arquivo: ${err.message}`, 'error');
+    } finally {
+      setUploadingField(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
-    setFormData(prev => ({ ...prev, [field]: publicUrl }));
-    notify(`Arquivo ${file.name} enviado com sucesso!`, 'success');
-  } catch (err: any) {
-    console.error("Erro no upload:", err);
-    notify(`Erro ao enviar arquivo: ${err.message}`, 'error');
-  } finally {
-    setUploadingField(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  }
-};
+  const triggerFileUpload = (field: string) => {
+    if (isReadOnly) return;
+    currentUploadTarget.current = field;
+    if (fileInputRef.current) {
+      // Definir aceites dinâmicos
+      if (field === 'audio_url') fileInputRef.current.accept = 'audio/*';
+      else fileInputRef.current.accept = 'image/*,application/pdf';
+      fileInputRef.current.click();
+    }
+  };
 
-const triggerFileUpload = (field: string) => {
-  if (isReadOnly) return;
-  currentUploadTarget.current = field;
-  if (fileInputRef.current) {
-    // Definir aceites dinâmicos
-    if (field === 'audio_url') fileInputRef.current.accept = 'audio/*';
-    else fileInputRef.current.accept = 'image/*,application/pdf';
-    fileInputRef.current.click();
-  }
-};
+  const filteredSalesList = useMemo(() => {
+    const list = [...cachedDrafts, ...sales.filter(s => {
+      if (s.status === SaleStatus.IN_PROGRESS && !s.returnReason) return false;
+      if (s.status === SaleStatus.FINISHED) return false;
+      return true;
+    })];
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [cachedDrafts, sales]);
 
-const filteredSalesList = useMemo(() => {
-  const list = [...cachedDrafts, ...sales.filter(s => {
-    if (s.status === SaleStatus.IN_PROGRESS && !s.returnReason) return false;
-    if (s.status === SaleStatus.FINISHED) return false;
-    return true;
-  })];
-  return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-}, [cachedDrafts, sales]);
+  return (
+    <div className="space-y-6 animate-in">
+      {/* Input oculto para gestão de arquivos */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileUpload}
+        className="hidden"
+      />
 
-return (
-  <div className="space-y-6 animate-in">
-    {/* Input oculto para gestão de arquivos */}
-    <input
-      type="file"
-      ref={fileInputRef}
-      onChange={handleFileUpload}
-      className="hidden"
-    />
-
-    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Minhas Vendas</h1>
-        <p className="text-slate-500 text-sm">Rascunhos, correções e vendas finalizadas.</p>
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Minhas Vendas</h1>
+          <p className="text-slate-500 text-sm">Rascunhos, correções e vendas finalizadas.</p>
+        </div>
+        <button onClick={openNewModal} className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl shadow-lg shadow-indigo-100 font-bold transition-all">
+          <i className="fas fa-plus mr-2"></i> Nova Ficha
+        </button>
       </div>
-      <button onClick={openNewModal} className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl shadow-lg shadow-indigo-100 font-bold transition-all">
-        <i className="fas fa-plus mr-2"></i> Nova Ficha
-      </button>
-    </div>
 
-    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-      <table className="w-full text-left">
-        <thead className="bg-slate-50 border-b">
-          <tr className="text-xs font-bold text-slate-500 uppercase">
-            <th className="px-6 py-4">Ref / Data</th>
-            <th className="px-6 py-4">Cliente / Info</th>
-            <th className="px-6 py-4 text-center">Origem</th>
-            <th className="px-6 py-4 text-center">Status</th>
-            <th className="px-6 py-4 text-right">Ações</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100 text-sm">
-          {filteredSalesList.length > 0 ? filteredSalesList.map(sale => {
-            const hasReturnReason = !!sale.returnReason && sale.status === SaleStatus.IN_PROGRESS;
-            const isDraft = sale.status === SaleStatus.DRAFT;
-            const isFinished = sale.status === SaleStatus.FINISHED;
-            return (
-              <tr key={sale.id} className={`hover:bg-slate-50/50 transition-colors ${hasReturnReason ? 'bg-amber-50/30' : ''}`}>
-                <td className="px-6 py-4">
-                  <p className="font-bold text-slate-900">#{sale.id}</p>
-                  <p className="text-[10px] text-slate-400">{new Date(sale.createdAt).toLocaleDateString()}</p>
-                </td>
-                <td className="px-6 py-4">
-                  <div className="flex items-center space-x-2">
-                    <p className="font-semibold text-slate-900">{sale?.customerData?.nome || 'Pendente...'}</p>
-                    {hasReturnReason && (
-                      <button onClick={() => setViewingReturnReason(sale.returnReason!)} className="bg-red-100 text-red-600 w-5 h-5 rounded-full flex items-center justify-center animate-bounce">
-                        <i className="fas fa-exclamation text-[10px]"></i>
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+        <table className="w-full text-left">
+          <thead className="bg-slate-50 border-b">
+            <tr className="text-xs font-bold text-slate-500 uppercase">
+              <th className="px-6 py-4">Ref / Data</th>
+              <th className="px-6 py-4">Cliente / Info</th>
+              <th className="px-6 py-4 text-center">Origem</th>
+              <th className="px-6 py-4 text-center">Status</th>
+              <th className="px-6 py-4 text-right">Ações</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 text-sm">
+            {filteredSalesList.length > 0 ? filteredSalesList.map(sale => {
+              const hasReturnReason = !!sale.returnReason && sale.status === SaleStatus.IN_PROGRESS;
+              const isDraft = sale.status === SaleStatus.DRAFT;
+              const isFinished = sale.status === SaleStatus.FINISHED;
+              return (
+                <tr key={sale.id} className={`hover:bg-slate-50/50 transition-colors ${hasReturnReason ? 'bg-amber-50/30' : ''}`}>
+                  <td className="px-6 py-4">
+                    <p className="font-bold text-slate-900">#{sale.id}</p>
+                    <p className="text-[10px] text-slate-400">{new Date(sale.createdAt).toLocaleDateString()}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center space-x-2">
+                      <p className="font-semibold text-slate-900">{sale?.customerData?.nome || 'Pendente...'}</p>
+                      {hasReturnReason && (
+                        <button onClick={() => setViewingReturnReason(sale.returnReason!)} className="bg-red-100 text-red-600 w-5 h-5 rounded-full flex items-center justify-center animate-bounce">
+                          <i className="fas fa-exclamation text-[10px]"></i>
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2 mt-0.5">
+                      <p className="text-[10px] font-mono text-slate-400">{sale?.customerData?.cpf || '---'}</p>
+                      <span className="text-[10px] text-slate-300">•</span>
+                      <p className="text-[10px] text-slate-500 font-medium">
+                        {sale?.customerData?.cidade || '---'} - {sale?.customerData?.estado || '--'}
+                      </p>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${isDraft ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                      {isDraft ? 'Cache' : 'Banco'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${isFinished ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                      hasReturnReason ? 'bg-red-50 text-red-700 border-red-100' : 'bg-slate-50 text-slate-600 border-slate-200'
+                      }`}>
+                      {hasReturnReason ? 'NECESSITA CORREÇÃO' : sale.status}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right space-x-1">
+                    <button onClick={() => openEditModal(sale)} className="text-indigo-600 p-2 hover:bg-indigo-50 rounded-lg transition-colors" title={isFinished ? "Visualizar" : "Editar"}>
+                      <i className={`fas ${isDraft || hasReturnReason ? 'fa-edit' : 'fa-eye'}`}></i>
+                    </button>
+                    {isDraft && (
+                      <button onClick={() => handleDeleteDraft(sale.id)} className="text-red-400 p-2 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors" title="Excluir Rascunho">
+                        <i className="fas fa-trash-alt"></i>
                       </button>
                     )}
-                  </div>
-                  <div className="flex items-center space-x-2 mt-0.5">
-                    <p className="text-[10px] font-mono text-slate-400">{sale?.customerData?.cpf || '---'}</p>
-                    <span className="text-[10px] text-slate-300">•</span>
-                    <p className="text-[10px] text-slate-500 font-medium">
-                      {sale?.customerData?.cidade || '---'} - {sale?.customerData?.estado || '--'}
-                    </p>
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-center">
-                  <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${isDraft ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700'}`}>
-                    {isDraft ? 'Cache' : 'Banco'}
-                  </span>
-                </td>
-                <td className="px-6 py-4 text-center">
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${isFinished ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                    hasReturnReason ? 'bg-red-50 text-red-700 border-red-100' : 'bg-slate-50 text-slate-600 border-slate-200'
-                    }`}>
-                    {hasReturnReason ? 'NECESSITA CORREÇÃO' : sale.status}
-                  </span>
-                </td>
-                <td className="px-6 py-4 text-right space-x-1">
-                  <button onClick={() => openEditModal(sale)} className="text-indigo-600 p-2 hover:bg-indigo-50 rounded-lg transition-colors" title={isFinished ? "Visualizar" : "Editar"}>
-                    <i className={`fas ${isDraft || hasReturnReason ? 'fa-edit' : 'fa-eye'}`}></i>
-                  </button>
-                  {isDraft && (
-                    <button onClick={() => handleDeleteDraft(sale.id)} className="text-red-400 p-2 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors" title="Excluir Rascunho">
-                      <i className="fas fa-trash-alt"></i>
-                    </button>
-                  )}
+                  </td>
+                </tr>
+              );
+            }) : (
+              <tr>
+                <td colSpan={5} className="px-6 py-12 text-center text-slate-400 italic font-medium">
+                  Nenhuma ficha visível no momento.
                 </td>
               </tr>
-            );
-          }) : (
-            <tr>
-              <td colSpan={5} className="px-6 py-12 text-center text-slate-400 italic font-medium">
-                Nenhuma ficha visível no momento.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+            )}
+          </tbody>
+        </table>
+      </div>
 
-    {showModal && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in">
-        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl overflow-hidden max-h-[95vh] flex flex-col">
-          <div className={`px-8 py-4 text-white flex justify-between items-center ${isReadOnly ? 'bg-emerald-600' : 'bg-indigo-600'}`}>
-            <div>
-              <h3 className="text-lg font-bold">{isReadOnly ? 'Visualização de Ficha Finalizada' : 'Ficha Cadastral Enterprise'}</h3>
-              {isReadOnly ? (
-                <p className="text-[10px] text-emerald-100 font-bold uppercase flex items-center">
-                  <i className="fas fa-lock mr-2"></i> Esta ficha está finalizada e não pode ser alterada.
-                </p>
-              ) : (
-                <p className="text-[10px] text-indigo-200 font-bold uppercase flex items-center">
-                  <i className="fas fa-sync fa-spin mr-2"></i> Salvamento automático ativo
-                </p>
-              )}
-            </div>
-            <button onClick={() => setShowModal(false)} className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors">
-              <i className="fas fa-times"></i>
-            </button>
-          </div>
-
-          <form onSubmit={handleCreateSale} className="p-8 overflow-y-auto space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <InputField label="Nome Completo" field="nome" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-2" disabled={isReadOnly} />
-              <InputField label="CPF/CNPJ" field="cpf" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
-              <InputField label="Data Nasc." field="data_nascimento" type="date" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
-              <InputField label="Nome da Mãe" field="nome_mae" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-2" disabled={isReadOnly} />
-              <InputField label="E-mail" field="email" type="email" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
-              <InputField label="Contato" field="contato" type="tel" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl overflow-hidden max-h-[95vh] flex flex-col">
+            <div className={`px-8 py-4 text-white flex justify-between items-center ${isReadOnly ? 'bg-emerald-600' : 'bg-indigo-600'}`}>
+              <div>
+                <h3 className="text-lg font-bold">{isReadOnly ? 'Visualização de Ficha Finalizada' : 'Ficha Cadastral Enterprise'}</h3>
+                {isReadOnly ? (
+                  <p className="text-[10px] text-emerald-100 font-bold uppercase flex items-center">
+                    <i className="fas fa-lock mr-2"></i> Esta ficha está finalizada e não pode ser alterada.
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-indigo-200 font-bold uppercase flex items-center">
+                    <i className="fas fa-sync fa-spin mr-2"></i> Salvamento automático ativo
+                  </p>
+                )}
+              </div>
+              <button onClick={() => setShowModal(false)} className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors">
+                <i className="fas fa-times"></i>
+              </button>
             </div>
 
-            <div className="space-y-4">
-              <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-widest border-b pb-1">Endereço</h4>
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-4 bg-slate-50 p-6 rounded-2xl border-2 border-slate-300">
-                <div className="md:col-span-3">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase flex justify-between ml-1">
-                    <span><i className="fas fa-search-location mr-1"></i> CEP</span>
-                    {isCepLoading && <i className="fas fa-spinner fa-spin text-indigo-500"></i>}
-                  </label>
-                  <input
-                    className="w-full px-4 py-2.5 rounded-xl border-2 border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-slate-100 hover:border-slate-400 transition-all"
-                    disabled={isReadOnly}
-                    value={formData.cep}
-                    onChange={e => { setFormData({ ...formData, cep: e.target.value }); if (e.target.value.replace(/\D/g, '').length === 8) handleCepLookup(e.target.value) }}
-                    maxLength={9}
-                    placeholder="00000-000"
-                  />
+            <form onSubmit={handleCreateSale} className="p-8 overflow-y-auto space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <InputField label="Nome Completo" field="nome" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-2" disabled={isReadOnly} />
+                <InputField label="CPF/CNPJ" field="cpf" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
+                <InputField label="Data Nasc." field="data_nascimento" type="date" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
+                <InputField label="Nome da Mãe" field="nome_mae" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-2" disabled={isReadOnly} />
+                <InputField label="E-mail" field="email" type="email" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
+                <InputField label="Contato" field="contato" type="tel" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
+              </div>
+
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-widest border-b pb-1">Endereço</h4>
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 bg-slate-50 p-6 rounded-2xl border-2 border-slate-300">
+                  <div className="md:col-span-3">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase flex justify-between ml-1">
+                      <span><i className="fas fa-search-location mr-1"></i> CEP</span>
+                      {isCepLoading && <i className="fas fa-spinner fa-spin text-indigo-500"></i>}
+                    </label>
+                    <input
+                      className="w-full px-4 py-2.5 rounded-xl border-2 border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-slate-100 hover:border-slate-400 transition-all"
+                      disabled={isReadOnly}
+                      value={formData.cep}
+                      onChange={e => { setFormData({ ...formData, cep: e.target.value }); if (e.target.value.replace(/\D/g, '').length === 8) handleCepLookup(e.target.value) }}
+                      maxLength={9}
+                      placeholder="00000-000"
+                    />
+                  </div>
+                  <InputField label="Logradouro / Rua" field="rua" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-7" disabled={isReadOnly} />
+                  <InputField label="Nº" field="numero" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-2" disabled={isReadOnly} />
+
+                  <InputField label="Complemento" field="complemento" required={false} formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-5" disabled={isReadOnly} />
+                  <InputField label="Bairro" field="bairro" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-7" disabled={isReadOnly} />
+
+                  <InputField label="Cidade" field="cidade" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-9" disabled={isReadOnly} />
+                  <InputField label="UF" field="estado" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-3" disabled={isReadOnly} />
                 </div>
-                <InputField label="Logradouro / Rua" field="rua" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-7" disabled={isReadOnly} />
-                <InputField label="Nº" field="numero" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-2" disabled={isReadOnly} />
-
-                <InputField label="Complemento" field="complemento" required={false} formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-5" disabled={isReadOnly} />
-                <InputField label="Bairro" field="bairro" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-7" disabled={isReadOnly} />
-
-                <InputField label="Cidade" field="cidade" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-9" disabled={isReadOnly} />
-                <InputField label="UF" field="estado" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} className="md:col-span-3" disabled={isReadOnly} />
               </div>
-            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <InputField label="Plano" field="plano" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <InputField label="Plano" field="plano" formData={formData} setFormData={setFormData} touched={touched} setTouched={setTouched} errors={errors} disabled={isReadOnly} />
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">Dia de Vencimento</label>
+                  <select disabled={isReadOnly} className="w-full px-4 py-2.5 rounded-xl border-2 border-slate-300 bg-white disabled:bg-slate-50 hover:border-slate-400 focus:ring-2 focus:ring-indigo-500 outline-none" value={formData.vencimento_dia} onChange={e => setFormData({ ...formData, vencimento_dia: parseInt(e.target.value) })}>
+                    {[5, 10, 15, 20, 25, 30].map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+              </div>
+
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-500 uppercase">Dia de Vencimento</label>
-                <select disabled={isReadOnly} className="w-full px-4 py-2.5 rounded-xl border-2 border-slate-300 bg-white disabled:bg-slate-50 hover:border-slate-400 focus:ring-2 focus:ring-indigo-500 outline-none" value={formData.vencimento_dia} onChange={e => setFormData({ ...formData, vencimento_dia: parseInt(e.target.value) })}>
-                  {[5, 10, 15, 20, 25, 30].map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
+                <label className="text-[10px] font-bold text-slate-500 uppercase ml-1">Anotações do Vendedor</label>
+                <textarea disabled={isReadOnly} className="w-full px-4 py-3 rounded-xl border-2 border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none min-h-[100px] text-sm disabled:bg-slate-50 hover:border-slate-400" placeholder="Observações..." value={formData.anotacoes || ''} onChange={e => setFormData({ ...formData, anotacoes: e.target.value })} />
               </div>
-            </div>
 
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase ml-1">Anotações do Vendedor</label>
-              <textarea disabled={isReadOnly} className="w-full px-4 py-3 rounded-xl border-2 border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none min-h-[100px] text-sm disabled:bg-slate-50 hover:border-slate-400" placeholder="Observações..." value={formData.anotacoes || ''} onChange={e => setFormData({ ...formData, anotacoes: e.target.value })} />
-            </div>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                {[
+                  { field: 'foto_frente_url', label: 'RG Frente' },
+                  { field: 'foto_verso_url', label: 'RG Verso' },
+                  { field: 'foto_comprovante_residencia_url', label: 'Comprovante' },
+                  { field: 'foto_ctps_url', label: 'CTPS' },
+                  { field: 'audio_url', label: 'Áudio Cliente' }
+                ].map(item => {
+                  const val = (formData as any)[item.field];
+                  const hasVal = !!val;
+                  const isUploading = uploadingField === item.field;
+                  return (
+                    <button key={item.field} type="button" disabled={isReadOnly || isUploading} onClick={() => triggerFileUpload(item.field)} className={`h-24 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center p-2 transition-all ${hasVal ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 border-slate-200 text-slate-400'} ${isReadOnly ? 'cursor-default opacity-80' : 'hover:border-indigo-300 hover:bg-slate-100'}`}>
+                      <i className={`fas ${isUploading ? 'fa-spinner fa-spin' : hasVal ? 'fa-check-circle' : 'fa-upload'} mb-1`}></i>
+                      <span className="text-[8px] font-bold uppercase text-center leading-tight mb-1">{item.label}</span>
+                      {hasVal && !isUploading && (
+                        <span className="text-[7px] text-emerald-700 font-medium truncate w-full px-1 py-0.5 bg-white/50 rounded border border-emerald-100 text-center" title={extractFilename(val)}>
+                          {extractFilename(val)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              {[
-                { field: 'foto_frente_url', label: 'RG Frente' },
-                { field: 'foto_verso_url', label: 'RG Verso' },
-                { field: 'foto_comprovante_residencia_url', label: 'Comprovante' },
-                { field: 'foto_ctps_url', label: 'CTPS' },
-                { field: 'audio_url', label: 'Áudio Cliente' }
-              ].map(item => {
-                const val = (formData as any)[item.field];
-                const hasVal = !!val;
-                const isUploading = uploadingField === item.field;
-                return (
-                  <button key={item.field} type="button" disabled={isReadOnly || isUploading} onClick={() => triggerFileUpload(item.field)} className={`h-24 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center p-2 transition-all ${hasVal ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 border-slate-200 text-slate-400'} ${isReadOnly ? 'cursor-default opacity-80' : 'hover:border-indigo-300 hover:bg-slate-100'}`}>
-                    <i className={`fas ${isUploading ? 'fa-spinner fa-spin' : hasVal ? 'fa-check-circle' : 'fa-upload'} mb-1`}></i>
-                    <span className="text-[8px] font-bold uppercase text-center leading-tight mb-1">{item.label}</span>
-                    {hasVal && !isUploading && (
-                      <span className="text-[7px] text-emerald-700 font-medium truncate w-full px-1 py-0.5 bg-white/50 rounded border border-emerald-100 text-center" title={extractFilename(val)}>
-                        {extractFilename(val)}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="pt-6 border-t flex justify-between gap-4 sticky bottom-0 bg-white py-4">
-              <div className="flex gap-2">
-                <button type="button" onClick={() => setShowModal(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-6 py-2.5 rounded-xl font-bold text-xs uppercase">Fechar</button>
-                {editingSaleId && cachedDrafts.some(d => d.id === editingSaleId) && !isReadOnly && (
-                  <button type="button" onClick={() => handleDeleteDraft(editingSaleId!)} className="bg-red-50 hover:bg-red-100 text-red-600 px-6 py-2.5 rounded-xl font-bold text-xs uppercase transition-all">
-                    <i className="fas fa-trash-alt mr-2"></i> Excluir Rascunho
+              <div className="pt-6 border-t flex justify-between gap-4 sticky bottom-0 bg-white py-4">
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setShowModal(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-6 py-2.5 rounded-xl font-bold text-xs uppercase">Fechar</button>
+                  {editingSaleId && cachedDrafts.some(d => d.id === editingSaleId) && !isReadOnly && (
+                    <button type="button" onClick={() => handleDeleteDraft(editingSaleId!)} className="bg-red-50 hover:bg-red-100 text-red-600 px-6 py-2.5 rounded-xl font-bold text-xs uppercase transition-all">
+                      <i className="fas fa-trash-alt mr-2"></i> Excluir Rascunho
+                    </button>
+                  )}
+                </div>
+                {!isReadOnly && (
+                  <button type="submit" disabled={!isFormValid} className={`px-8 py-2.5 rounded-xl font-bold text-xs uppercase shadow-lg transition-all ${isFormValid ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-300 text-slate-500 cursor-not-allowed'}`}>
+                    {editingSaleId && sales.find(s => s.id === editingSaleId)?.returnReason ? 'Reenviar para Análise' : 'Enviar para Gerente'}
                   </button>
                 )}
               </div>
-              {!isReadOnly && (
-                <button type="submit" disabled={!isFormValid} className={`px-8 py-2.5 rounded-xl font-bold text-xs uppercase shadow-lg transition-all ${isFormValid ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-300 text-slate-500 cursor-not-allowed'}`}>
-                  {editingSaleId && sales.find(s => s.id === editingSaleId)?.returnReason ? 'Reenviar para Análise' : 'Enviar para Gerente'}
-                </button>
-              )}
-            </div>
-          </form>
+            </form>
+          </div>
         </div>
-      </div>
-    )}
+      )}
 
-    {viewingReturnReason && (
-      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-        <div className="bg-white rounded-2xl p-6 shadow-2xl max-w-sm w-full space-y-4">
-          <h3 className="font-bold text-slate-900 flex items-center">
-            <i className="fas fa-exclamation-circle text-red-500 mr-2"></i> Motivo da Devolução
-          </h3>
-          <p className="text-sm text-slate-600 italic">"{viewingReturnReason}"</p>
-          <button onClick={() => setViewingReturnReason(null)} className="w-full bg-slate-100 py-2 rounded-xl font-bold text-xs uppercase text-slate-600 hover:bg-slate-200">Entendido</button>
+      {viewingReturnReason && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 shadow-2xl max-w-sm w-full space-y-4">
+            <h3 className="font-bold text-slate-900 flex items-center">
+              <i className="fas fa-exclamation-circle text-red-500 mr-2"></i> Motivo da Devolução
+            </h3>
+            <p className="text-sm text-slate-600 italic">"{viewingReturnReason}"</p>
+            <button onClick={() => setViewingReturnReason(null)} className="w-full bg-slate-100 py-2 rounded-xl font-bold text-xs uppercase text-slate-600 hover:bg-slate-200">Entendido</button>
+          </div>
         </div>
-      </div>
-    )}
-  </div>
-);
+      )}
+    </div>
+  );
 };
 
 export default SellerDashboard;
