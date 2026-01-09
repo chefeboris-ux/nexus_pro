@@ -7,4 +7,8 @@ if (!supabaseUrl || !supabaseKey) {
     console.warn("⚠️ Supabase: Variáveis de ambiente VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY não encontradas.");
 }
 
-export const supabase = createClient(supabaseUrl || '', supabaseKey || '');
+// Fallback para evitar crash da aplicação se as envs não estiverem definidas (comum em pre-builds)
+const safeUrl = supabaseUrl || 'https://placeholder.supabase.co';
+const safeKey = supabaseKey || 'placeholder-key';
+
+export const supabase = createClient(safeUrl, safeKey);
